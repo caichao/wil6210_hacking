@@ -31,7 +31,9 @@ static u32 mem_addr;
 static u32 dbg_txdesc_index;
 static u32 dbg_vring_index; /* 24+ for Rx, 0..23 for Tx */
 static u8 sector_index;
+static u8 sector_type;
 static u8 rf_module_num;
+static u32 rf_module_vector;
 
 enum dbg_off_type {
 	doff_u32 = 0,
@@ -1234,7 +1236,7 @@ static int wil_temp_debugfs_show(struct seq_file *s, void *data)
 	//u8 rf_module_number;
 	int i = 0;
 
-	u8 sector_type = 1; // for transmitter
+	//u8 sector_type = 1; // for transmitter
 	u32 rf_modules_vec = 0x00000001;
 	struct wmi_get_rf_sector_params_cmd cmd;
 	struct {
@@ -1362,35 +1364,45 @@ static int wil_freq_debugfs_show(struct seq_file *s, void *data)
 	struct sk_buff *msg;
 	u8 rc;
 
-	u8 sector_type = 0x01;
-	u32 rf_modules_vec = 0;
-	struct wmi_get_rf_sector_params_cmd cmd;
+	//u8 sector_type = 0x00;
+	u32 rf_modules_vec = 0x00000001;
+	struct wmi_set_rf_sector_params_cmd cmd;
+	struct wmi_get_rf_sector_params_cmd get_cmd;
 	struct {
 		struct wmi_cmd_hdr wmi;
-		struct wmi_get_rf_sector_params_done_event evt;
+		struct wmi_set_rf_sector_params_done_event evt;
 	} __packed reply;
+
+		struct {
+		struct wmi_cmd_hdr wmi;
+		struct wmi_get_rf_sector_params_done_event evt;
+	} __packed get_reply;
 
 	struct nlattr *nl_cfgs; 
 	struct nlattr *nl_cfg;
 
-	u32 i;
-	struct wmi_rf_sector_info *si;
-
+	u32 i=0;
+	//struct wmi_rf_sector_info *si = (struct wmi_rf_sector_info*)malloc(sizeof(struct wmi_rf_sector_info));
+	struct wmi_rf_sector_info si;
 	// initialize the weighting network
-	si->psh_hi = 0x01020304;
-	si->psh_lo = 0x04030201;
-	si->etype0 = 0x00000001;
-	si->etype1 = 0x00000002;
-	si->etype2 = 0x00000003;
-	si->dtype_swch_off = 0x00000004;
-
+	si.psh_hi = 0x01020304;
+	si.psh_lo = 0x04030201;
+	si.etype0 = 0x00000001;
+	si.etype1 = 0x00000002;
+	si.etype2 = 0x00000003;
+	si.dtype_swch_off = 0x30c30d86;
 
 	cmd.sector_idx = cpu_to_le16(sector_index);
 	cmd.sector_type = sector_type;
-	cmd.rf_modules_vec = rf_modules_vec & 0xFF;
+	cmd.rf_modules_vec = rf_module_vector & 0xFF;
+
+	for(i = 0; i < WMI_MAX_RF_MODULES_NUM; i++){
+		cmd.sectors_info[i] = si;
+	}
+
 	memset(&reply, 0, sizeof(reply));
 
-	seq_printf(s, "parameter initialization ok \n");
+	wil_err(wil, "parameter initialization ok \n");
 
 	rc = wmi_call(wil, WMI_SET_RF_SECTOR_PARAMS_CMDID, &cmd, sizeof(cmd),
 		      WMI_SET_RF_SECTOR_PARAMS_DONE_EVENTID,
@@ -1404,18 +1416,59 @@ static int wil_freq_debugfs_show(struct seq_file *s, void *data)
 		return wil_rf_sector_status_to_rc(reply.evt.status);
 	}
 
-	msg = cfg80211_vendor_cmd_alloc_reply_skb(
+	seq_printf(s, "set rf sector status = %d \n", reply.evt.status);
+
+	wil_err(wil, "wmi set call ok \n");
+
+	get_cmd.sector_idx = cpu_to_le16(sector_index);
+	get_cmd.sector_type = sector_type;
+	get_cmd.rf_modules_vec = rf_modules_vec & 0xFF;
+	memset(&get_reply, 0, sizeof(get_reply));
+	rc = wmi_call(wil, WMI_GET_RF_SECTOR_PARAMS_CMDID, &cmd, sizeof(cmd),
+		      WMI_GET_RF_SECTOR_PARAMS_DONE_EVENTID,
+		      &get_reply, sizeof(get_reply),
+		      500);
+	if (rc)
+		return rc;
+	if (get_reply.evt.status) {
+		seq_printf(s, "get rf sector cfg failed with status \n");
+		return wil_rf_sector_status_to_rc(get_reply.evt.status);
+	}
+
+	wil_err(wil, "wmi get call ok \n");
+
+	seq_printf(s, "retrieve written value\n");
+	seq_printf(s, 
+		"psh_hi = 0x%08x \n"
+		"psh_lo = 0x%08x \n"
+		"etype0 = 0x%08x \n"
+		"etype1 = 0x%08x \n"
+		"etype2 = 0x%08x \n"
+		"dtype_swch_off = 0x%08x \n",
+		le32_to_cpu(get_reply.evt.sectors_info[rf_module_num].psh_hi),
+		le32_to_cpu(get_reply.evt.sectors_info[rf_module_num].psh_lo),
+		le32_to_cpu(get_reply.evt.sectors_info[rf_module_num].etype0),
+		le32_to_cpu(get_reply.evt.sectors_info[rf_module_num].etype1),
+		le32_to_cpu(get_reply.evt.sectors_info[rf_module_num].etype2),
+		le32_to_cpu(get_reply.evt.sectors_info[rf_module_num].dtype_swch_off)
+	);
+
+
+
+/*	msg = cfg80211_vendor_cmd_alloc_reply_skb(
 		wiphy, 64 * WMI_MAX_RF_MODULES_NUM);
+	// msg = cfg80211_vendor_cmd_alloc_reply_skb(
+	// 	wiphy, 64);
 	if (!msg)
 		return -ENOMEM;
 
-	if (nla_put_u64_64bit(msg, QCA_ATTR_TSF,
-			      le64_to_cpu(reply.evt.tsf),
-			      QCA_ATTR_PAD))
-		goto nla_put_failure;
+	// if (nla_put_u64_64bit(msg, QCA_ATTR_TSF,
+	// 		      le64_to_cpu(reply.evt.tsf),
+	// 		      QCA_ATTR_PAD))
+	// 	goto nla_put_failure;
 
 
-	seq_printf(s, "begin to confgiure the weigsihting network \n");
+	wil_err(wil, "begin to confgiure the weigsihting network \n");
 
 	nl_cfgs = nla_nest_start(msg, QCA_ATTR_DMG_RF_SECTOR_CFG);
 	if (!nl_cfgs)
@@ -1426,21 +1479,21 @@ static int wil_freq_debugfs_show(struct seq_file *s, void *data)
 		nl_cfg = nla_nest_start(msg, 0);
 		if (!nl_cfg)
 			goto nla_put_failure;
-		si = &reply.evt.sectors_info[i];
+		//si = &reply.evt.sectors_info[i];
 		if (nla_put_u8(msg, QCA_ATTR_DMG_RF_SECTOR_CFG_MODULE_INDEX,
 			       i) ||
 		    nla_put_u32(msg, QCA_ATTR_DMG_RF_SECTOR_CFG_ETYPE0,
-				le32_to_cpu(si->etype0)) ||
+				le32_to_cpu(si.etype0)) ||
 		    nla_put_u32(msg, QCA_ATTR_DMG_RF_SECTOR_CFG_ETYPE1,
-				le32_to_cpu(si->etype1)) ||
+				le32_to_cpu(si.etype1)) ||
 		    nla_put_u32(msg, QCA_ATTR_DMG_RF_SECTOR_CFG_ETYPE2,
-				le32_to_cpu(si->etype2)) ||
+				le32_to_cpu(si.etype2)) ||
 		    nla_put_u32(msg, QCA_ATTR_DMG_RF_SECTOR_CFG_PSH_HI,
-				le32_to_cpu(si->psh_hi)) ||
+				le32_to_cpu(si.psh_hi)) ||
 		    nla_put_u32(msg, QCA_ATTR_DMG_RF_SECTOR_CFG_PSH_LO,
-				le32_to_cpu(si->psh_lo)) ||
+				le32_to_cpu(si.psh_lo)) ||
 		    nla_put_u32(msg, QCA_ATTR_DMG_RF_SECTOR_CFG_DTYPE_X16,
-				le32_to_cpu(si->dtype_swch_off)))
+				le32_to_cpu(si.dtype_swch_off)))
 			goto nla_put_failure;
 		nla_nest_end(msg, nl_cfg);
 	//}
@@ -1452,8 +1505,8 @@ static int wil_freq_debugfs_show(struct seq_file *s, void *data)
 	return rc;
 nla_put_failure:
 	kfree_skb(msg);
-	return -ENOBUFS;
-
+	return -ENOBUFS;*/
+ /* */
 	
 	return 0;
 }
@@ -2089,7 +2142,10 @@ static const struct dbg_off dbg_statics[] = {
 	{"mem_addr",	0644, (ulong)&mem_addr, doff_u32},
 	{"led_polarity", 0644, (ulong)&led_polarity, doff_u8},
 	{"sector_index", 0644, (ulong)&sector_index, doff_u8}, // this is added to change the sector id
-	{"rf_module_num", 0644, (ulong)&rf_module_num, doff_u8}, // this is added to change the sector id
+	{"rf_module_num", 0644, (ulong)&rf_module_num, doff_u8}, // added
+	{"sector_type", 0644, (ulong)&rf_module_num, doff_u8}, // added
+	{"rf_module_vector", 0644, (ulong)&rf_module_vector, doff_u32}, // added
+	
 };
 
 int wil6210_debugfs_init(struct wil6210_priv *wil)
