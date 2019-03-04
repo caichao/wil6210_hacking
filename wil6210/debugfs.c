@@ -1003,7 +1003,7 @@ static int wil_bf_debugfs_show(struct seq_file *s, void *data)
 		struct wmi_notify_req_done_event evt;
 	} __packed reply;
 
-	seq_printf(s, "ARRAY_SIZE(wil->sta) = %lld \n", le64_to_cpu(ARRAY_SIZE(wil->sta)));
+	//seq_printf(s, "ARRAY_SIZE(wil->sta) = %lld \n", le64_to_cpu(ARRAY_SIZE(wil->sta)));
 
 	for (i = 0; i < ARRAY_SIZE(wil->sta); i++) {
 		u32 status;
@@ -1350,6 +1350,41 @@ enum qca_nl80211_vendor_subcmds {
 	QCA_NL80211_VENDOR_SUBCMD_DMG_RF_SET_SELECTED_SECTOR = 142,
 };
 
+static inline void wil_halt_cpu(struct wil6210_priv *wil)
+{
+	wil_w(wil, RGF_USER_USER_CPU_0, BIT_USER_USER_CPU_MAN_RST);
+	wil_w(wil, RGF_USER_MAC_CPU_0,  BIT_USER_MAC_CPU_MAN_RST);
+}
+
+static inline void wil_release_cpu(struct wil6210_priv *wil)
+{
+	/* Start CPU */
+	wil_w(wil, RGF_USER_USER_CPU_0, 1);
+}
+
+static void wil_pre_fw_config(struct wil6210_priv *wil)
+{
+	/* Mark FW as loaded from host */
+	wil_s(wil, RGF_USER_USAGE_6, 1);
+
+	/* clear any interrupts which on-card-firmware
+	 * may have set
+	 */
+	wil6210_clear_irq(wil);
+	/* CAF_ICR - clear and mask */
+	/* it is W1C, clear by writing back same value */
+	wil_s(wil, RGF_CAF_ICR + offsetof(struct RGF_ICR, ICR), 0);
+	wil_w(wil, RGF_CAF_ICR + offsetof(struct RGF_ICR, IMV), ~0);
+	/* clear PAL_UNIT_ICR (potential D0->D3 leftover) */
+	wil_s(wil, RGF_PAL_UNIT_ICR + offsetof(struct RGF_ICR, ICR), 0);
+
+	if (wil->fw_calib_result > 0) {
+		__le32 val = cpu_to_le32(wil->fw_calib_result |
+						(CALIB_RESULT_SIGNATURE << 8));
+		wil_w(wil, RGF_USER_FW_CALIB_RESULT, (u32 __force)val);
+	}
+}
+
 /*---------freq------------*/
 static int wil_freq_debugfs_show(struct seq_file *s, void *data)
 {
@@ -1361,6 +1396,13 @@ static int wil_freq_debugfs_show(struct seq_file *s, void *data)
 
 	struct wil6210_priv *wil = s->private;
 	struct wiphy *wiphy = wil_to_wiphy(wil);
+	//******************************************* start *************************************************************
+	/*
+	debug results:  I can modify the parameters of rf sectors here, and I do read it modified as expected,
+								However, when I read the sector parameters using other function, say cat temp, 
+								the value changes to the original. Fucking board. 
+	*/
+	/*
 	struct sk_buff *msg;
 	u8 rc;
 
@@ -1452,62 +1494,61 @@ static int wil_freq_debugfs_show(struct seq_file *s, void *data)
 		le32_to_cpu(get_reply.evt.sectors_info[rf_module_num].etype2),
 		le32_to_cpu(get_reply.evt.sectors_info[rf_module_num].dtype_swch_off)
 	);
-
-
-
-/*	msg = cfg80211_vendor_cmd_alloc_reply_skb(
-		wiphy, 64 * WMI_MAX_RF_MODULES_NUM);
-	// msg = cfg80211_vendor_cmd_alloc_reply_skb(
-	// 	wiphy, 64);
-	if (!msg)
-		return -ENOMEM;
-
-	// if (nla_put_u64_64bit(msg, QCA_ATTR_TSF,
-	// 		      le64_to_cpu(reply.evt.tsf),
-	// 		      QCA_ATTR_PAD))
-	// 	goto nla_put_failure;
-
-
-	wil_err(wil, "begin to confgiure the weigsihting network \n");
-
-	nl_cfgs = nla_nest_start(msg, QCA_ATTR_DMG_RF_SECTOR_CFG);
-	if (!nl_cfgs)
-		goto nla_put_failure;
-	//for (i = 0; i < WMI_MAX_RF_MODULES_NUM; i++) {
-		// if (!(rf_modules_vec & BIT(i)))
-		// 	continue;
-		nl_cfg = nla_nest_start(msg, 0);
-		if (!nl_cfg)
-			goto nla_put_failure;
-		//si = &reply.evt.sectors_info[i];
-		if (nla_put_u8(msg, QCA_ATTR_DMG_RF_SECTOR_CFG_MODULE_INDEX,
-			       i) ||
-		    nla_put_u32(msg, QCA_ATTR_DMG_RF_SECTOR_CFG_ETYPE0,
-				le32_to_cpu(si.etype0)) ||
-		    nla_put_u32(msg, QCA_ATTR_DMG_RF_SECTOR_CFG_ETYPE1,
-				le32_to_cpu(si.etype1)) ||
-		    nla_put_u32(msg, QCA_ATTR_DMG_RF_SECTOR_CFG_ETYPE2,
-				le32_to_cpu(si.etype2)) ||
-		    nla_put_u32(msg, QCA_ATTR_DMG_RF_SECTOR_CFG_PSH_HI,
-				le32_to_cpu(si.psh_hi)) ||
-		    nla_put_u32(msg, QCA_ATTR_DMG_RF_SECTOR_CFG_PSH_LO,
-				le32_to_cpu(si.psh_lo)) ||
-		    nla_put_u32(msg, QCA_ATTR_DMG_RF_SECTOR_CFG_DTYPE_X16,
-				le32_to_cpu(si.dtype_swch_off)))
-			goto nla_put_failure;
-		nla_nest_end(msg, nl_cfg);
-	//}
-
-	nla_nest_end(msg, nl_cfgs);
-	rc = cfg80211_vendor_cmd_reply(msg);
-
-	seq_printf(s, "end to confgiure the weigsihting network \n");
-	return rc;
-nla_put_failure:
-	kfree_skb(msg);
-	return -ENOBUFS;*/
- /* */
+	*/
+	//**************************************** end *********************************************************
 	
+	//******************************************************************************************************
+	/*
+		This time, I wanna first see the parameters of wil_priv structure, let me check it
+	*/
+
+	//char board_file[WIL_BOARD_];
+	u8 rc;
+	u32 dma_rgf = 0x8802bc; // user scratch pad
+	u16 i = 0;
+/*	void __iomem *x = wmi_addr(wil, dma_rgf);
+	u32 buf_len = 4;
+	char buf[buf_len]; */
+
+	seq_printf(s, 
+	"hw_name = %s\n"
+	"wil_fw_name = %s\n",
+	//"board_file = %s\n", 
+	//"brd_file_addr = 0x%08x\n"
+	//"brd_file_max_size = 0x%08\n",
+	wil->hw_name,
+	wil->wil_fw_name
+	//wil->board_file,    // deprecated members
+	//wil->brd_file_addr,
+	//wil->brd_file_max_size
+	);
+
+	// verify the hardware and reload the firmware
+		wil_halt_cpu(wil);
+		memset(wil->fw_version, 0, sizeof(wil->fw_version));
+		
+		rc = wil_request_firmware(wil, wil->wil_fw_name, true);
+		if (rc)
+			return rc;
+		rc = wil_request_firmware(wil, WIL_BOARD_FILE_NAME, true);
+		if (rc)
+			return rc;
+
+		wil_pre_fw_config(wil);
+		wil_release_cpu(wil);
+
+	seq_printf(s, "firmware reload ready\n");
+
+/*	wil_memcpy_fromio_32(buf, x, buf_len * sizeof(buf));
+
+	for(i = 0; i < sizeof(buf) * buf_len; i+= 4)
+	{
+		seq_printf(s, "0x%x", buf[i]);
+		seq_printf(s, "%x", buf[i+1]);
+		seq_printf(s, "%x", buf[i+2]);
+		seq_printf(s, "%x\n", buf[i+3]);
+	}*/
+
 	return 0;
 }
 

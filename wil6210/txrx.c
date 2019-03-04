@@ -28,7 +28,7 @@
 #include "txrx.h"
 #include "trace.h"
 
-static bool rtap_include_phy_info;
+static bool rtap_include_phy_info = true;
 module_param(rtap_include_phy_info, bool, 0444);
 MODULE_PARM_DESC(rtap_include_phy_info,
 		 " Include PHY info in the radiotap header, default - no");
